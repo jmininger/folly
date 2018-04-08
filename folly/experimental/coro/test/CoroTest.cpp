@@ -13,6 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+#include <folly/Portability.h>
+
+#if FOLLY_HAS_COROUTINES
+
+#include <folly/Chrono.h>
 #include <folly/executors/ManualExecutor.h>
 #include <folly/experimental/coro/Future.h>
 #include <folly/io/async/ScopedEventBaseThread.h>
@@ -34,6 +40,16 @@ TEST(Coro, Basic) {
 
   EXPECT_TRUE(future.await_ready());
   EXPECT_EQ(42, future.get());
+}
+
+TEST(Coro, BasicFuture) {
+  ManualExecutor executor;
+
+  auto future = via(&executor, task42()).toFuture();
+
+  EXPECT_FALSE(future.isReady());
+
+  EXPECT_EQ(42, future.getVia(&executor));
 }
 
 coro::Task<void> taskVoid() {
@@ -67,8 +83,13 @@ TEST(Coro, Sleep) {
 
   future.wait();
 
+  // The total time should be roughly 1 second. Some builds, especially
+  // optimized ones, may result in slightly less than 1 second, so we perform
+  // rounding here.
+  auto totalTime = std::chrono::steady_clock::now() - startTime;
   EXPECT_GE(
-      std::chrono::steady_clock::now() - startTime, std::chrono::seconds{1});
+      chrono::round<std::chrono::seconds>(totalTime), std::chrono::seconds{1});
+
   EXPECT_TRUE(future.await_ready());
 }
 
@@ -101,10 +122,10 @@ coro::Task<int> taskRecursion(int depth) {
 
 TEST(Coro, LargeStack) {
   ScopedEventBaseThread evbThread;
-  auto future = via(evbThread.getEventBase(), taskRecursion(10000));
+  auto future = via(evbThread.getEventBase(), taskRecursion(5000));
 
   future.wait();
-  EXPECT_EQ(10000, future.get());
+  EXPECT_EQ(5000, future.get());
 }
 
 coro::Task<void> taskThreadNested(std::thread::id threadId) {
@@ -155,3 +176,5 @@ TEST(Coro, CurrentExecutor) {
   future.wait();
   EXPECT_EQ(42, future.get());
 }
+
+#endif

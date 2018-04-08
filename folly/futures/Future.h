@@ -21,6 +21,9 @@
 #include <memory>
 #include <type_traits>
 #include <vector>
+#if FOLLY_HAS_COROUTINES
+#include <experimental/coroutine>
+#endif
 
 #include <folly/Optional.h>
 #include <folly/Portability.h>
@@ -392,6 +395,41 @@ class SemiFuture : private futures::detail::FutureBase<T> {
   /// use via and pass a meaningful executor.
   inline Future<T> toUnsafeFuture() &&;
 
+#if FOLLY_HAS_COROUTINES
+  class promise_type {
+   public:
+    SemiFuture get_return_object() {
+      return promise_.getSemiFuture();
+    }
+
+    std::experimental::suspend_never initial_suspend() {
+      return {};
+    }
+
+    std::experimental::suspend_never final_suspend() {
+      return {};
+    }
+
+    void return_value(T& value) {
+      promise_.setValue(std::move(value));
+    }
+
+    void unhandled_exception() {
+      promise_.setException(exception_wrapper(std::current_exception()));
+    }
+
+   private:
+    folly::Promise<T> promise_;
+  };
+
+  template <typename Awaitable>
+  static SemiFuture fromAwaitable(Awaitable&& awaitable) {
+    return [](Awaitable awaitable) -> SemiFuture {
+      co_return co_await awaitable;
+    }(std::forward<Awaitable>(awaitable));
+  }
+#endif
+
  private:
   friend class Promise<T>;
   template <class>
@@ -701,19 +739,19 @@ class Future : private futures::detail::FutureBase<T> {
   /// by then), and it is active (active by default).
   ///
   /// Inactive Futures will activate upon destruction.
-  FOLLY_DEPRECATED("do not use") Future<T>& activate() & {
+  [[deprecated("do not use")]] Future<T>& activate() & {
     this->core_->activate();
     return *this;
   }
-  FOLLY_DEPRECATED("do not use") Future<T>& deactivate() & {
+  [[deprecated("do not use")]] Future<T>& deactivate() & {
     this->core_->deactivate();
     return *this;
   }
-  FOLLY_DEPRECATED("do not use") Future<T> activate() && {
+  [[deprecated("do not use")]] Future<T> activate() && {
     this->core_->activate();
     return std::move(*this);
   }
-  FOLLY_DEPRECATED("do not use") Future<T> deactivate() && {
+  [[deprecated("do not use")]] Future<T> deactivate() && {
     this->core_->deactivate();
     return std::move(*this);
   }
@@ -897,7 +935,6 @@ class Future : private futures::detail::FutureBase<T> {
 } // namespace folly
 
 #if FOLLY_HAS_COROUTINES
-#include <experimental/coroutine>
 
 namespace folly {
 namespace detail {

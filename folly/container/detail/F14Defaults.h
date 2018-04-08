@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright 2018-present Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,11 +14,20 @@
  * limitations under the License.
  */
 
-#include <folly/system/VersionCheck.h>
+#pragma once
 
-namespace folly { namespace detail {
+#include <functional>
+#include <memory>
 
-FOLLY_VERSION_CHECK(folly, FOLLY_VERSION)
+namespace folly {
+namespace f14 {
+template <typename T>
+using DefaultHasher = std::hash<T>;
 
-} // namespace detail
+template <typename T>
+using DefaultKeyEqual = std::equal_to<T>;
+
+template <typename T>
+using DefaultAlloc = std::allocator<T>;
+} // namespace f14
 } // namespace folly

@@ -82,6 +82,9 @@ struct BasePolicy
 
   using Super = std::tuple<Hasher, KeyEqual, Alloc>;
 
+  // if false, F14Table will be smaller but F14Table::begin() won't work
+  static constexpr bool kEnableItemIteration = true;
+
   static constexpr bool isAvalanchingHasher() {
     return IsAvalanchingHasher<Hasher, Key>::value;
   }
@@ -416,8 +419,8 @@ class ValueContainerPolicy : public BasePolicy<
   complainUnlessNothrowMove() {}
 
   template <typename T>
-  FOLLY_DEPRECATED(
-      "use F14NodeMap/Set or mark key and mapped type move constructor nothrow")
+  [[deprecated(
+      "use F14NodeMap/Set or mark key and mapped type move constructor nothrow")]]
   std::enable_if_t<!std::is_nothrow_move_constructible<
       T>::value> complainUnlessNothrowMove() {}
 
@@ -469,10 +472,8 @@ class ValueContainerPolicy : public BasePolicy<
     AllocTraits::destroy(a, std::addressof(item));
   }
 
-  std::size_t indirectBytesUsed(
-      std::size_t /*size*/,
-      std::size_t /*capacity*/,
-      ItemIter /*underlying*/) const {
+  std::size_t indirectBytesUsed(std::size_t /*size*/, std::size_t /*capacity*/)
+      const {
     return 0;
   }
 
@@ -681,10 +682,8 @@ class NodeContainerPolicy
     item.~Item();
   }
 
-  std::size_t indirectBytesUsed(
-      std::size_t size,
-      std::size_t /*capacity*/,
-      ItemIter /*underlying*/) const {
+  std::size_t indirectBytesUsed(std::size_t size, std::size_t /*capacity*/)
+      const {
     return size * sizeof(Value);
   }
 
@@ -729,8 +728,6 @@ class VectorContainerIterator : public BaseIter<ValuePtr, uint32_t> {
   ~VectorContainerIterator() = default;
 
   /*implicit*/ operator VectorContainerIterator<ValueConstPtr>() const {
-    // can we trust that fancy pointers are implicitly convertible to
-    // fancy const pointers?
     return VectorContainerIterator<ValueConstPtr>{current_, lowest_};
   }
 
@@ -817,6 +814,8 @@ class VectorContainerPolicy : public BasePolicy<
   using typename Super::AllocTraits;
 
  public:
+  static constexpr bool kEnableItemIteration = false;
+
   using InternalSizeType = Item;
 
   using ConstIter =
@@ -825,6 +824,9 @@ class VectorContainerPolicy : public BasePolicy<
       kIsMap,
       VectorContainerIterator<typename AllocTraits::pointer>,
       ConstIter>;
+  using ConstReverseIter = typename AllocTraits::const_pointer;
+  using ReverseIter = std::
+      conditional_t<kIsMap, typename AllocTraits::pointer, ConstReverseIter>;
 
   using ValuePtr = typename AllocTraits::pointer;
 
@@ -947,8 +949,8 @@ class VectorContainerPolicy : public BasePolicy<
   complainUnlessNothrowMove() {}
 
   template <typename T>
-  FOLLY_DEPRECATED(
-      "use F14NodeMap/Set or mark key and mapped type move constructor nothrow")
+  [[deprecated(
+      "use F14NodeMap/Set or mark key and mapped type move constructor nothrow")]]
   std::enable_if_t<!std::is_nothrow_move_constructible<
       T>::value> complainUnlessNothrowMove() {}
 
@@ -1109,10 +1111,8 @@ class VectorContainerPolicy : public BasePolicy<
     }
   }
 
-  std::size_t indirectBytesUsed(
-      std::size_t /*size*/,
-      std::size_t capacity,
-      ItemIter /*underlying*/) const {
+  std::size_t indirectBytesUsed(std::size_t /*size*/, std::size_t capacity)
+      const {
     return sizeof(Value) * capacity;
   }
 
@@ -1150,6 +1150,22 @@ class VectorContainerPolicy : public BasePolicy<
 
   Iter indexToIter(Item index) const {
     return Iter{values_ + index, values_};
+  }
+
+  Iter iter(ReverseIter it) {
+    return Iter{it, values_};
+  }
+
+  ConstIter iter(ConstReverseIter it) const {
+    return ConstIter{it, values_};
+  }
+
+  ReverseIter riter(Iter it) {
+    return it.current_;
+  }
+
+  ConstReverseIter riter(ConstIter it) const {
+    return it.current_;
   }
 
   ValuePtr values_{nullptr};

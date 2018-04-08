@@ -19,7 +19,7 @@
 /**
  * F14NodeSet, F14ValueSet, and F14VectorSet
  *
- * F14FastSet is a conditional typedef to F14ValueSet or F14VectorSet
+ * F14FastSet conditionally inherits from F14ValueSet or F14VectorSet
  *
  * See F14.md
  *
@@ -29,6 +29,7 @@
 
 #include <folly/lang/SafeAssert.h>
 
+#include <folly/container/F14Set-pre.h>
 #include <folly/container/detail/F14Policy.h>
 #include <folly/container/detail/F14Table.h>
 
@@ -38,14 +39,32 @@
 
 namespace folly {
 
-template <typename... Args>
-using F14NodeSet = std::unordered_set<Args...>;
-template <typename... Args>
-using F14ValueSet = std::unordered_set<Args...>;
-template <typename... Args>
-using F14VectorSet = std::unordered_set<Args...>;
-template <typename... Args>
-using F14FastSet = std::unordered_set<Args...>;
+template <typename K, typename H, typename E, typename A>
+class F14NodeSet : public std::unordered_set<K, H, E, A> {
+  using Super = std::unordered_set<K, H, E, A>;
+
+ public:
+  using Super::Super;
+  F14NodeSet() : Super() {}
+};
+
+template <typename K, typename H, typename E, typename A>
+class F14ValueSet : public std::unordered_set<K, H, E, A> {
+  using Super = std::unordered_set<K, H, E, A>;
+
+ public:
+  using Super::Super;
+  F14ValueSet() : Super() {}
+};
+
+template <typename K, typename H, typename E, typename A>
+class F14VectorSet : public std::unordered_set<K, H, E, A> {
+  using Super = std::unordered_set<K, H, E, A>;
+
+ public:
+  using Super::Super;
+  F14VectorSet() : Super() {}
+};
 
 } // namespace folly
 
@@ -350,6 +369,20 @@ class F14BasicSet {
     return table_.find(key).atEnd() ? 0 : 1;
   }
 
+  /// prehash(key) does the work of evaluating hash_function()(key)
+  /// (including additional bit-mixing for non-avalanching hash functions),
+  /// wraps the result of that work in a token for later reuse, and
+  /// begins prefetching of the first steps of looking for key into the
+  /// local CPU cache.
+  ///
+  /// The returned token may be used at any time, may be used more than
+  /// once, and may be used in other F14 sets and maps.  Tokens are
+  /// transferrable between any F14 containers (maps and sets) with the
+  /// same key_type and equal hash_function()s.
+  ///
+  /// Hash tokens are not hints -- it is a bug to call any method on this
+  /// class with a token t and key k where t isn't the result of a call
+  /// to prehash(k2) with k2 == k.
   F14HashToken prehash(key_type const& key) const {
     return table_.prehash(key);
   }
@@ -506,11 +539,7 @@ bool setsEqual(S const& lhs, S const& rhs) {
 } // namespace detail
 } // namespace f14
 
-template <
-    typename Key,
-    typename Hasher = f14::DefaultHasher<Key>,
-    typename KeyEqual = f14::DefaultKeyEqual<Key>,
-    typename Alloc = f14::DefaultAlloc<Key>>
+template <typename Key, typename Hasher, typename KeyEqual, typename Alloc>
 class F14ValueSet
     : public f14::detail::F14BasicSet<f14::detail::SetPolicyWithDefaults<
           f14::detail::ValueContainerPolicy,
@@ -540,12 +569,6 @@ class F14ValueSet
 };
 
 template <typename K, typename H, typename E, typename A>
-void swap(F14ValueSet<K, H, E, A>& lhs, F14ValueSet<K, H, E, A>& rhs) noexcept(
-    noexcept(lhs.swap(rhs))) {
-  lhs.swap(rhs);
-}
-
-template <typename K, typename H, typename E, typename A>
 bool operator==(
     F14ValueSet<K, H, E, A> const& lhs,
     F14ValueSet<K, H, E, A> const& rhs) {
@@ -559,11 +582,7 @@ bool operator!=(
   return !(lhs == rhs);
 }
 
-template <
-    typename Key,
-    typename Hasher = f14::DefaultHasher<Key>,
-    typename KeyEqual = f14::DefaultKeyEqual<Key>,
-    typename Alloc = f14::DefaultAlloc<Key>>
+template <typename Key, typename Hasher, typename KeyEqual, typename Alloc>
 class F14NodeSet
     : public f14::detail::F14BasicSet<f14::detail::SetPolicyWithDefaults<
           f14::detail::NodeContainerPolicy,
@@ -593,12 +612,6 @@ class F14NodeSet
 };
 
 template <typename K, typename H, typename E, typename A>
-void swap(F14NodeSet<K, H, E, A>& lhs, F14NodeSet<K, H, E, A>& rhs) noexcept(
-    noexcept(lhs.swap(rhs))) {
-  lhs.swap(rhs);
-}
-
-template <typename K, typename H, typename E, typename A>
 bool operator==(
     F14NodeSet<K, H, E, A> const& lhs,
     F14NodeSet<K, H, E, A> const& rhs) {
@@ -612,11 +625,7 @@ bool operator!=(
   return !(lhs == rhs);
 }
 
-template <
-    typename Key,
-    typename Hasher = f14::DefaultHasher<Key>,
-    typename KeyEqual = f14::DefaultKeyEqual<Key>,
-    typename Alloc = f14::DefaultAlloc<Key>>
+template <typename Key, typename Hasher, typename KeyEqual, typename Alloc>
 class F14VectorSet
     : public f14::detail::F14BasicSet<f14::detail::SetPolicyWithDefaults<
           f14::detail::VectorContainerPolicy,
@@ -636,6 +645,8 @@ class F14VectorSet
   using typename Super::const_iterator;
   using typename Super::iterator;
   using typename Super::key_type;
+  using reverse_iterator = typename Policy::ReverseIter;
+  using const_reverse_iterator = typename Policy::ConstReverseIter;
 
   F14VectorSet() noexcept(
       f14::detail::F14Table<Policy>::kDefaultConstructIsNoexcept)
@@ -648,6 +659,27 @@ class F14VectorSet
       f14::detail::F14Table<Policy>::kSwapIsNoexcept) {
     this->table_.swap(rhs.table_);
   }
+
+  // ITERATION ORDER
+  //
+  // Deterministic iteration order for insert-only workloads is part of
+  // F14VectorSet's supported API: iterator is LIFO and reverse_iterator
+  // is FIFO.
+  //
+  // If there have been no calls to erase() then iterator and
+  // const_iterator enumerate entries in the opposite of insertion order.
+  // begin()->first is the key most recently inserted.  reverse_iterator
+  // and reverse_const_iterator, therefore, enumerate in LIFO (insertion)
+  // order for insert-only workloads.  Deterministic iteration order is
+  // only guaranteed if no keys were removed since the last time the
+  // set was empty.  Iteration order is preserved across rehashes and
+  // F14VectorSet copies and moves.
+  //
+  // iterator uses LIFO order so that erasing while iterating with begin()
+  // and end() is safe using the erase(it++) idiom, which is supported
+  // by std::set and std::unordered_set.  erase(iter) invalidates iter
+  // and all iterators before iter in the non-reverse iteration order.
+  // Every successful erase invalidates all reverse iterators.
 
   iterator begin() {
     return cbegin();
@@ -669,6 +701,41 @@ class F14VectorSet
     return this->table_.linearEnd();
   }
 
+  reverse_iterator rbegin() {
+    return this->table_.values_;
+  }
+  const_reverse_iterator rbegin() const {
+    return crbegin();
+  }
+  const_reverse_iterator crbegin() const {
+    return this->table_.values_;
+  }
+
+  reverse_iterator rend() {
+    return this->table_.values_ + this->table_.size();
+  }
+  const_reverse_iterator rend() const {
+    return crend();
+  }
+  const_reverse_iterator crend() const {
+    return this->table_.values_ + this->table_.size();
+  }
+
+  // explicit conversions between iterator and reverse_iterator
+  iterator iter(reverse_iterator riter) {
+    return this->table_.iter(riter);
+  }
+  const_iterator iter(const_reverse_iterator riter) const {
+    return this->table_.iter(riter);
+  }
+
+  reverse_iterator riter(iterator it) {
+    return this->table_.riter(it);
+  }
+  const_reverse_iterator riter(const_iterator it) const {
+    return this->table_.riter(it);
+  }
+
  private:
   void eraseUnderlying(typename Policy::ItemIter underlying) {
     Alloc& a = this->table_.alloc();
@@ -687,10 +754,7 @@ class F14VectorSet
       tail.item() = index;
       auto p = std::addressof(values[index]);
       folly::assume(p != nullptr);
-      std::allocator_traits<Alloc>::construct(
-          a, p, std::move(values[tailIndex]));
-      std::allocator_traits<Alloc>::destroy(
-          a, std::addressof(values[tailIndex]));
+      this->table_.transfer(a, std::addressof(values[tailIndex]), p, 1);
     }
   }
 
@@ -721,13 +785,6 @@ class F14VectorSet
 };
 
 template <typename K, typename H, typename E, typename A>
-void swap(
-    F14VectorSet<K, H, E, A>& lhs,
-    F14VectorSet<K, H, E, A>& rhs) noexcept(noexcept(lhs.swap(rhs))) {
-  lhs.swap(rhs);
-}
-
-template <typename K, typename H, typename E, typename A>
 bool operator==(
     F14VectorSet<K, H, E, A> const& lhs,
     F14VectorSet<K, H, E, A> const& rhs) {
@@ -740,17 +797,49 @@ bool operator!=(
     F14VectorSet<K, H, E, A> const& rhs) {
   return !(lhs == rhs);
 }
-
-template <
-    typename Key,
-    typename Hasher = f14::DefaultHasher<Key>,
-    typename KeyEqual = f14::DefaultKeyEqual<Key>,
-    typename Alloc = f14::DefaultAlloc<Key>>
-using F14FastSet = std::conditional_t<
-    sizeof(Key) < 24,
-    F14ValueSet<Key, Hasher, KeyEqual, Alloc>,
-    F14VectorSet<Key, Hasher, KeyEqual, Alloc>>;
-
 } // namespace folly
 
 #endif // FOLLY_F14_VECTOR_INTRINSICS_AVAILABLE
+
+namespace folly {
+template <typename Key, typename Hasher, typename KeyEqual, typename Alloc>
+class F14FastSet : public std::conditional_t<
+                       sizeof(Key) < 24,
+                       F14ValueSet<Key, Hasher, KeyEqual, Alloc>,
+                       F14VectorSet<Key, Hasher, KeyEqual, Alloc>> {
+  using Super = std::conditional_t<
+      sizeof(Key) < 24,
+      F14ValueSet<Key, Hasher, KeyEqual, Alloc>,
+      F14VectorSet<Key, Hasher, KeyEqual, Alloc>>;
+
+ public:
+  using Super::Super;
+  F14FastSet() : Super() {}
+};
+
+template <typename K, typename H, typename E, typename A>
+void swap(F14ValueSet<K, H, E, A>& lhs, F14ValueSet<K, H, E, A>& rhs) noexcept(
+    noexcept(lhs.swap(rhs))) {
+  lhs.swap(rhs);
+}
+
+template <typename K, typename H, typename E, typename A>
+void swap(F14NodeSet<K, H, E, A>& lhs, F14NodeSet<K, H, E, A>& rhs) noexcept(
+    noexcept(lhs.swap(rhs))) {
+  lhs.swap(rhs);
+}
+
+template <typename K, typename H, typename E, typename A>
+void swap(
+    F14VectorSet<K, H, E, A>& lhs,
+    F14VectorSet<K, H, E, A>& rhs) noexcept(noexcept(lhs.swap(rhs))) {
+  lhs.swap(rhs);
+}
+
+template <typename K, typename H, typename E, typename A>
+void swap(F14FastSet<K, H, E, A>& lhs, F14FastSet<K, H, E, A>& rhs) noexcept(
+    noexcept(lhs.swap(rhs))) {
+  lhs.swap(rhs);
+}
+
+} // namespace folly

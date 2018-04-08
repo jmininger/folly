@@ -24,6 +24,15 @@ set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 project(${PACKAGE_NAME} CXX C)
 
+set(INCLUDE_INSTALL_DIR include CACHE STRING
+    "The subdirectory where header files should be installed")
+set(LIB_INSTALL_DIR lib CACHE STRING
+    "The subdirectory where libraries should be installed")
+set(BIN_INSTALL_DIR bin CACHE STRING
+    "The subdirectory where binaries should be installed")
+set(CMAKE_INSTALL_DIR lib/cmake/folly CACHE STRING
+    "The subdirectory where CMake package config files should be installed")
+
 option(BUILD_SHARED_LIBS
   "If enabled, build folly as a shared library.  \
   This is generally discouraged, since folly does not commit to having \
@@ -285,8 +294,8 @@ target_include_directories(folly
 install(TARGETS folly
   EXPORT folly
   RUNTIME DESTINATION bin
-  LIBRARY DESTINATION lib
-  ARCHIVE DESTINATION lib)
+  LIBRARY DESTINATION ${LIB_INSTALL_DIR}
+  ARCHIVE DESTINATION ${LIB_INSTALL_DIR})
 auto_install_files(folly ${FOLLY_DIR}
   ${hfiles}
   ${FOLLY_DIR}/Fingerprint.h
@@ -295,26 +304,30 @@ auto_install_files(folly ${FOLLY_DIR}
 )
 install(
   FILES ${CMAKE_CURRENT_BINARY_DIR}/folly/folly-config.h
-  DESTINATION include/folly
+  DESTINATION ${INCLUDE_INSTALL_DIR}/folly
   COMPONENT dev
 )
 
 # Generate the folly-config.cmake file for installation so that
 # downstream projects that use on folly can easily depend on it in their CMake
 # files using "find_package(folly CONFIG)"
-configure_file(
-  ${CMAKE_CURRENT_SOURCE_DIR}/CMake/folly-config.cmake.in
-  ${CMAKE_CURRENT_BINARY_DIR}/folly-config.cmake
-  @ONLY
+include(CMakePackageConfigHelpers)
+configure_package_config_file(
+  CMake/folly-config.cmake.in
+  folly-config.cmake
+  INSTALL_DESTINATION ${CMAKE_INSTALL_DIR}
+  PATH_VARS
+    INCLUDE_INSTALL_DIR
+    CMAKE_INSTALL_DIR
 )
 install(
   FILES ${CMAKE_CURRENT_BINARY_DIR}/folly-config.cmake
-  DESTINATION share/folly
+  DESTINATION ${CMAKE_INSTALL_DIR}
   COMPONENT dev
 )
 install(
   EXPORT folly
-  DESTINATION share/folly
+  DESTINATION ${CMAKE_INSTALL_DIR}
   NAMESPACE Folly::
   FILE folly-targets.cmake
   COMPONENT dev
@@ -407,6 +420,7 @@ if (BUILD_TESTS)
       # EnumerateTest.cpp since it uses macros to define tests.
       #TEST enumerate_test SOURCES EnumerateTest.cpp
       TEST evicting_cache_map_test SOURCES EvictingCacheMapTest.cpp
+      TEST f14_pre_test SOURCES F14PreTest.cpp
       TEST f14_map_test SOURCES F14MapTest.cpp
       TEST f14_set_test SOURCES F14SetTest.cpp
       TEST foreach_test SOURCES ForeachTest.cpp

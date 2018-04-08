@@ -24,8 +24,6 @@
 #include <unordered_set>
 #include <vector>
 
-#include <boost/regex/pending/unicode_iterator.hpp>
-
 #include <folly/Conv.h>
 #include <folly/ExceptionString.h>
 #include <folly/FBString.h>
@@ -600,22 +598,6 @@ inline void toLowerAscii(std::string& str) {
   // str[0] is legal also if the string is empty.
   toLowerAscii(&str[0], str.size());
 }
-
-template <
-    class Iterator = const char*,
-    class Base = folly::Range<boost::u8_to_u32_iterator<Iterator>>>
-class UTF8Range : public Base {
- public:
-  /* implicit */ UTF8Range(const folly::Range<Iterator> baseRange)
-      : Base(boost::u8_to_u32_iterator<Iterator>(
-                 baseRange.begin(), baseRange.begin(), baseRange.end()),
-             boost::u8_to_u32_iterator<Iterator>(
-                 baseRange.end(), baseRange.begin(), baseRange.end())) {}
-  /* implicit */ UTF8Range(const std::string& baseString)
-      : Base(folly::Range<Iterator>(baseString)) {}
-};
-
-using UTF8StringPiece = UTF8Range<const char*>;
 
 } // namespace folly
 

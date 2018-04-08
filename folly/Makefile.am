@@ -59,6 +59,7 @@ nobase_follyinclude_HEADERS = \
 	container/Access.h \
 	container/Array.h \
 	container/detail/BitIteratorDetail.h \
+	container/detail/F14Defaults.h \
 	container/detail/F14IntrinsicsAvailability.h \
 	container/detail/F14Memory.h \
 	container/detail/F14Policy.h \
@@ -66,7 +67,9 @@ nobase_follyinclude_HEADERS = \
 	container/Iterator.h \
 	container/Enumerate.h \
 	container/EvictingCacheMap.h \
+	container/F14Map-pre.h \
 	container/F14Map.h \
+	container/F14Set-pre.h \
 	container/F14Set.h \
 	container/Foreach.h \
 	container/Foreach-inl.h \
@@ -87,6 +90,7 @@ nobase_follyinclude_HEADERS = \
 	detail/PolyDetail.h \
 	detail/RangeCommon.h \
 	detail/RangeSse42.h \
+	detail/Singleton.h \
 	detail/SlowFingerprint.h \
 	detail/SocketFastOpen.h \
 	detail/StaticSingletonManager.h \
@@ -340,6 +344,7 @@ nobase_follyinclude_HEADERS = \
 	lang/Launder.h \
 	lang/RValueReferenceWrapper.h \
 	lang/SafeAssert.h \
+	lang/UncaughtExceptions.h \
 	Lazy.h \
 	Likely.h \
 	LockTraits.h \
@@ -461,7 +466,6 @@ nobase_follyinclude_HEADERS = \
 	system/Shell.h \
 	system/ThreadId.h \
 	system/ThreadName.h \
-	system/VersionCheck.h \
 	stop_watch.h \
 	String.h \
 	String-inl.h \
@@ -486,8 +490,8 @@ nobase_follyinclude_HEADERS = \
 	Try-inl.h \
 	Try.h \
 	Unicode.h \
+	UTF8String.h \
 	Function.h \
-	UncaughtExceptions.h \
 	Unit.h \
 	Uri.h \
 	Uri-inl.h \
@@ -637,7 +641,6 @@ libfolly_la_SOURCES = \
 	system/MemoryMapping.cpp \
 	system/Shell.cpp \
 	system/ThreadName.cpp \
-	system/VersionCheck.cpp \
 	Subprocess.cpp \
 	TimeoutQueue.cpp \
 	Try.cpp \

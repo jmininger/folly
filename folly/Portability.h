@@ -50,15 +50,6 @@ constexpr bool kHasUnalignedAccess = false;
   __attribute__((__format__(__printf__, format_param, dots_param)))
 #endif
 
-// deprecated
-#if defined(__clang__) || defined(__GNUC__)
-# define FOLLY_DEPRECATED(msg) __attribute__((__deprecated__(msg)))
-#elif defined(_MSC_VER)
-# define FOLLY_DEPRECATED(msg) __declspec(deprecated(msg))
-#else
-# define FOLLY_DEPRECATED(msg)
-#endif
-
 // warn unused result
 #if defined(__has_cpp_attribute)
 #if __has_cpp_attribute(nodiscard)
@@ -174,11 +165,17 @@ constexpr bool kIsSanitize = false;
 #endif
 
 #ifdef FOLLY_HAVE_SHADOW_LOCAL_WARNINGS
-#define FOLLY_GCC_DISABLE_NEW_SHADOW_WARNINGS        \
+#define FOLLY_GCC_DISABLE_NEW_SHADOW_WARNINGS            \
   FOLLY_GCC_DISABLE_WARNING("-Wshadow-compatible-local") \
-  FOLLY_GCC_DISABLE_WARNING("-Wshadow-local")
+  FOLLY_GCC_DISABLE_WARNING("-Wshadow-local")            \
+  FOLLY_GCC_DISABLE_WARNING("-Wshadow")
 #else
 #define FOLLY_GCC_DISABLE_NEW_SHADOW_WARNINGS /* empty */
+#endif
+
+// Globally disable -Wshadow for gcc < 5.
+#if __GNUC__ == 4 && !__clang__
+FOLLY_GCC_DISABLE_NEW_SHADOW_WARNINGS
 #endif
 
 /* Platform specific TLS support
@@ -349,6 +346,20 @@ constexpr auto kIsWindows = false;
 constexpr auto kMscVer = _MSC_VER;
 #else
 constexpr auto kMscVer = 0;
+#endif
+
+#if FOLLY_MICROSOFT_ABI_VER
+constexpr auto kMicrosoftAbiVer = FOLLY_MICROSOFT_ABI_VER;
+#else
+constexpr auto kMicrosoftAbiVer = 0;
+#endif
+
+// cpplib is an implementation of the standard library, and is the one typically
+// used with the msvc compiler
+#if _CPPLIB_VER
+constexpr auto kCpplibVer = _CPPLIB_VER;
+#else
+constexpr auto kCpplibVer = 0;
 #endif
 } // namespace folly
 

@@ -92,17 +92,19 @@ void retryingImpl(size_t k, Policy&& p, FF&& ff, Prom prom) {
       return;
     }
     auto& x = t.exception();
-    auto q = pm(k, x);
+    auto q = makeFutureWith([&] { return pm(k, x); });
     q.then([k,
             prom = std::move(prom),
             xm = std::move(x),
             pm = std::move(pm),
-            ffm = std::move(ffm)](bool shouldRetry) mutable {
-      if (shouldRetry) {
+            ffm = std::move(ffm)](Try<bool> shouldRetry) mutable {
+      if (shouldRetry.hasValue() && shouldRetry.value()) {
         retryingImpl(k, std::move(pm), std::move(ffm), std::move(prom));
-      } else {
+      } else if (shouldRetry.hasValue()) {
         prom.setException(std::move(xm));
-      };
+      } else {
+        prom.setException(std::move(shouldRetry.exception()));
+      }
     });
   });
 }
@@ -142,10 +144,13 @@ Duration retryingJitteredExponentialBackoffDur(
     Duration backoff_max,
     double jitter_param,
     URNG& rng) {
-  using d = Duration;
   auto dist = std::normal_distribution<double>(0.0, jitter_param);
   auto jitter = std::exp(dist(rng));
-  auto backoff = d(d::rep(jitter * backoff_min.count() * std::pow(2, n - 1)));
+  auto backoff_rep = jitter * backoff_min.count() * std::pow(2, n - 1);
+  if (UNLIKELY(backoff_rep >= std::numeric_limits<Duration::rep>::max())) {
+    return backoff_max;
+  }
+  auto backoff = Duration(Duration::rep(backoff_rep));
   return std::max(backoff_min, std::min(backoff_max, backoff));
 }
 

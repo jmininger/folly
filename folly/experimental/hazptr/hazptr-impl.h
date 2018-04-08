@@ -184,7 +184,6 @@ class hazptr_priv {
     tail_ = nullptr;
     rcount_ = 0;
     active_ = true;
-    default_hazptr_domain().priv_add(this);
   }
 
   bool active() {
@@ -243,6 +242,7 @@ class hazptr_priv {
     }
     rcount_ = 0;
     domain.tryBulkReclaim();
+    domain.tryTimedCleanup();
   }
 
   void collect(hazptr_obj*& colHead, hazptr_obj*& colTail) {
@@ -315,55 +315,12 @@ class hazptr_priv {
 };
 
 static_assert(
-    folly::kMscVer || std::is_trivial<hazptr_priv>::value,
+    folly::kCpplibVer || std::is_trivial<hazptr_priv>::value,
     "hazptr_priv must be trivial to avoid a branch to check initialization");
 
 void hazptr_priv_init(hazptr_priv& priv);
 void hazptr_priv_shutdown(hazptr_priv& priv);
 bool hazptr_priv_try_retire(hazptr_obj* obj);
-
-inline void hazptr_priv_list::insert(hazptr_priv* rec) {
-  std::lock_guard<std::mutex> g(m_);
-  auto prev = head_ == nullptr ? rec : head_->prev();
-  auto next = head_ == nullptr ? rec : head_;
-  rec->set_next(next);
-  rec->set_prev(prev);
-  if (head_) {
-    prev->set_next(rec);
-    next->set_prev(rec);
-  } else {
-    head_ = rec;
-  }
-}
-
-inline void hazptr_priv_list::remove(hazptr_priv* rec) {
-  std::lock_guard<std::mutex> g(m_);
-  auto prev = rec->prev();
-  auto next = rec->next();
-  if (next == rec) {
-    DCHECK(prev == rec);
-    DCHECK(head_ == rec);
-    head_ = nullptr;
-  } else {
-    prev->set_next(next);
-    next->set_prev(prev);
-    if (head_ == rec) {
-      head_ = next;
-    }
-  }
-}
-
-inline void hazptr_priv_list::collect(hazptr_obj*& head, hazptr_obj*& tail) {
-  std::lock_guard<std::mutex> g(m_);
-  auto rec = head_;
-  while (rec) {
-    rec->collect(head, tail);
-    rec = rec->next();
-    if (rec == head_) {
-      break;
-    }
-  }
-}
 
 /** tls globals */
 
@@ -386,8 +343,11 @@ struct hazptr_tls_globals_ {
     tls_state = TLS_DESTROYED;
   }
 };
+
+struct HazptrTag {};
+typedef folly::SingletonThreadLocal<hazptr_tls_globals_, HazptrTag> PrivList;
 FOLLY_ALWAYS_INLINE hazptr_tls_globals_& hazptr_tls_globals() {
-  return folly::SingletonThreadLocal<hazptr_tls_globals_, void>::get();
+  return PrivList::get();
 }
 
 /**
@@ -932,23 +892,30 @@ inline hazptr_domain::~hazptr_domain() {
   }
 }
 
+inline void hazptr_domain::tryTimedCleanup() {
+  uint64_t time = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                      std::chrono::steady_clock::now().time_since_epoch())
+                      .count();
+  auto prevtime = syncTime_.load(std::memory_order_relaxed);
+  if (time < prevtime ||
+      !syncTime_.compare_exchange_strong(
+          prevtime, time + syncTimePeriod_, std::memory_order_relaxed)) {
+    return;
+  }
+  cleanup();
+}
+
 inline void hazptr_domain::cleanup() {
   hazptr_obj* h = nullptr;
   hazptr_obj* t = nullptr;
-  priv_.collect(h, t);
+  for (hazptr_tls_globals_& tls : PrivList::accessAllThreads()) {
+    tls.priv.collect(h, t);
+  }
   if (h) {
     DCHECK(t);
     pushRetired(h, t, 0);
   }
   bulkReclaim();
-}
-
-inline void hazptr_domain::priv_add(hazptr_priv* rec) {
-  priv_.insert(rec);
-}
-
-inline void hazptr_domain::priv_remove(hazptr_priv* rec) {
-  priv_.remove(rec);
 }
 
 inline hazptr_rec* hazptr_domain::hazptrAcquire() {
@@ -1243,7 +1210,6 @@ inline void hazptr_priv_shutdown(hazptr_priv& priv) {
   if (!priv.empty()) {
     priv.push_all_to_domain();
   }
-  default_hazptr_domain().priv_remove(&priv);
 }
 
 inline bool hazptr_priv_try_retire(hazptr_obj* obj) {
@@ -1259,74 +1225,6 @@ inline bool hazptr_priv_try_retire(hazptr_obj* obj) {
   }
   return false;
 }
-
-/** hazptr_obj_batch */
-/*  Only for default domain. Supports only hazptr_obj_base_refcounted
- *  and a thread-safe access only, for now. */
-
-class hazptr_obj_batch {
-  static constexpr int DefaultThreshold = 20;
-  hazptr_obj* head_{nullptr};
-  hazptr_obj* tail_{nullptr};
-  int rcount_{0};
-  int threshold_{DefaultThreshold};
-
- public:
-  hazptr_obj_batch() {}
-  hazptr_obj_batch(hazptr_obj* head, hazptr_obj* tail, int rcount)
-      : head_(head), tail_(tail), rcount_(rcount) {}
-
-  ~hazptr_obj_batch() {
-    retire_all();
-  }
-
-  /* Prepare a hazptr_obj_base_refcounted for retirement but don't
-       push it the domain yet. Return true if the batch is ready. */
-  template <typename T, typename D = std::default_delete<T>>
-  hazptr_obj_batch prep_retire_refcounted(
-      hazptr_obj_base_refcounted<T, D>* obj,
-      D deleter = {}) {
-    obj->preRetire(deleter);
-    obj->next_ = head_;
-    head_ = obj;
-    if (tail_ == nullptr) {
-      tail_ = obj;
-    }
-    if (++rcount_ < threshold_) {
-      return hazptr_obj_batch();
-    } else {
-      auto head = head_;
-      auto tail = tail_;
-      auto rcount = rcount_;
-      clear();
-      return hazptr_obj_batch(head, tail, rcount);
-    }
-  }
-
-  bool empty() {
-    return rcount_ == 0;
-  }
-
-  void retire_all() {
-    if (!empty()) {
-      auto& domain = default_hazptr_domain();
-      domain.pushRetired(head_, tail_, rcount_);
-      domain.tryBulkReclaim();
-      clear();
-    }
-  }
-
-  void set_threshold(int thresh) {
-    threshold_ = thresh;
-  }
-
- private:
-  void clear() {
-    head_ = nullptr;
-    tail_ = nullptr;
-    rcount_ = 0;
-  }
-};
 
 } // namespace hazptr
 } // namespace folly

@@ -19,7 +19,7 @@
 /**
  * F14NodeMap, F14ValueMap, and F14VectorMap
  *
- * F14FastMap is a conditional typedef to F14ValueMap or F14VectorMap
+ * F14FastMap conditionally inherits from F14ValueMap or F14VectorMap
  *
  * See F14.md
  *
@@ -34,6 +34,7 @@
 #include <folly/lang/Exception.h>
 #include <folly/lang/SafeAssert.h>
 
+#include <folly/container/F14Map-pre.h>
 #include <folly/container/detail/F14Policy.h>
 #include <folly/container/detail/F14Table.h>
 
@@ -43,14 +44,32 @@
 
 namespace folly {
 
-template <typename... Args>
-using F14NodeMap = std::unordered_map<Args...>;
-template <typename... Args>
-using F14ValueMap = std::unordered_map<Args...>;
-template <typename... Args>
-using F14VectorMap = std::unordered_map<Args...>;
-template <typename... Args>
-using F14FastMap = std::unordered_map<Args...>;
+template <typename K, typename M, typename H, typename E, typename A>
+class F14ValueMap : public std::unordered_map<K, M, H, E, A> {
+  using Super = std::unordered_map<K, M, H, E, A>;
+
+ public:
+  using Super::Super;
+  F14ValueMap() : Super() {}
+};
+
+template <typename K, typename M, typename H, typename E, typename A>
+class F14NodeMap : public std::unordered_map<K, M, H, E, A> {
+  using Super = std::unordered_map<K, M, H, E, A>;
+
+ public:
+  using Super::Super;
+  F14NodeMap() : Super() {}
+};
+
+template <typename K, typename M, typename H, typename E, typename A>
+class F14VectorMap : public std::unordered_map<K, M, H, E, A> {
+  using Super = std::unordered_map<K, M, H, E, A>;
+
+ public:
+  using Super::Super;
+  F14VectorMap() : Super() {}
+};
 
 } // namespace folly
 
@@ -551,6 +570,20 @@ class F14BasicMap {
     return table_.find(key).atEnd() ? 0 : 1;
   }
 
+  /// prehash(key) does the work of evaluating hash_function()(key)
+  /// (including additional bit-mixing for non-avalanching hash functions),
+  /// wraps the result of that work in a token for later reuse, and
+  /// begins prefetching the first steps of looking for key into the
+  /// local CPU cache.
+  ///
+  /// The returned token may be used at any time, may be used more than
+  /// once, and may be used in other F14 sets and maps.  Tokens are
+  /// transferrable between any F14 containers (maps and sets) with the
+  /// same key_type and equal hash_function()s.
+  ///
+  /// Hash tokens are not hints -- it is a bug to call any method on this
+  /// class with a token t and key k where t isn't the result of a call
+  /// to prehash(k2) with k2 == k.
   F14HashToken prehash(key_type const& key) const {
     return table_.prehash(key);
   }
@@ -724,9 +757,9 @@ bool mapsEqual(M const& lhs, M const& rhs) {
 template <
     typename Key,
     typename Mapped,
-    typename Hasher = f14::DefaultHasher<Key>,
-    typename KeyEqual = f14::DefaultKeyEqual<Key>,
-    typename Alloc = f14::DefaultAlloc<std::pair<Key const, Mapped>>>
+    typename Hasher,
+    typename KeyEqual,
+    typename Alloc>
 class F14ValueMap
     : public f14::detail::F14BasicMap<f14::detail::MapPolicyWithDefaults<
           f14::detail::ValueContainerPolicy,
@@ -758,13 +791,6 @@ class F14ValueMap
 };
 
 template <typename K, typename M, typename H, typename E, typename A>
-void swap(
-    F14ValueMap<K, M, H, E, A>& lhs,
-    F14ValueMap<K, M, H, E, A>& rhs) noexcept(noexcept(lhs.swap(rhs))) {
-  lhs.swap(rhs);
-}
-
-template <typename K, typename M, typename H, typename E, typename A>
 bool operator==(
     F14ValueMap<K, M, H, E, A> const& lhs,
     F14ValueMap<K, M, H, E, A> const& rhs) {
@@ -781,9 +807,9 @@ bool operator!=(
 template <
     typename Key,
     typename Mapped,
-    typename Hasher = f14::DefaultHasher<Key>,
-    typename KeyEqual = f14::DefaultKeyEqual<Key>,
-    typename Alloc = f14::DefaultAlloc<std::pair<Key const, Mapped>>>
+    typename Hasher,
+    typename KeyEqual,
+    typename Alloc>
 class F14NodeMap
     : public f14::detail::F14BasicMap<f14::detail::MapPolicyWithDefaults<
           f14::detail::NodeContainerPolicy,
@@ -817,13 +843,6 @@ class F14NodeMap
 };
 
 template <typename K, typename M, typename H, typename E, typename A>
-void swap(
-    F14NodeMap<K, M, H, E, A>& lhs,
-    F14NodeMap<K, M, H, E, A>& rhs) noexcept(noexcept(lhs.swap(rhs))) {
-  lhs.swap(rhs);
-}
-
-template <typename K, typename M, typename H, typename E, typename A>
 bool operator==(
     F14NodeMap<K, M, H, E, A> const& lhs,
     F14NodeMap<K, M, H, E, A> const& rhs) {
@@ -840,9 +859,9 @@ bool operator!=(
 template <
     typename Key,
     typename Mapped,
-    typename Hasher = f14::DefaultHasher<Key>,
-    typename KeyEqual = f14::DefaultKeyEqual<Key>,
-    typename Alloc = f14::DefaultAlloc<std::pair<Key const, Mapped>>>
+    typename Hasher,
+    typename KeyEqual,
+    typename Alloc>
 class F14VectorMap
     : public f14::detail::F14BasicMap<f14::detail::MapPolicyWithDefaults<
           f14::detail::VectorContainerPolicy,
@@ -864,6 +883,8 @@ class F14VectorMap
   using typename Super::const_iterator;
   using typename Super::iterator;
   using typename Super::key_type;
+  using reverse_iterator = typename Policy::ReverseIter;
+  using const_reverse_iterator = typename Policy::ConstReverseIter;
 
   F14VectorMap() noexcept(
       f14::detail::F14Table<Policy>::kDefaultConstructIsNoexcept)
@@ -876,6 +897,27 @@ class F14VectorMap
       f14::detail::F14Table<Policy>::kSwapIsNoexcept) {
     this->table_.swap(rhs.table_);
   }
+
+  // ITERATION ORDER
+  //
+  // Deterministic iteration order for insert-only workloads is part of
+  // F14VectorMap's supported API: iterator is LIFO and reverse_iterator
+  // is FIFO.
+  //
+  // If there have been no calls to erase() then iterator and
+  // const_iterator enumerate entries in the opposite of insertion order.
+  // begin()->first is the key most recently inserted.  reverse_iterator
+  // and reverse_const_iterator, therefore, enumerate in LIFO (insertion)
+  // order for insert-only workloads.  Deterministic iteration order is
+  // only guaranteed if no keys were removed since the last time the
+  // map was empty.  Iteration order is preserved across rehashes and
+  // F14VectorMap copies and moves.
+  //
+  // iterator uses LIFO order so that erasing while iterating with begin()
+  // and end() is safe using the erase(it++) idiom, which is supported
+  // by std::map and std::unordered_map.  erase(iter) invalidates iter
+  // and all iterators before iter in the non-reverse iteration order.
+  // Every successful erase invalidates all reverse iterators.
 
   iterator begin() {
     return this->table_.linearBegin(this->size());
@@ -897,15 +939,52 @@ class F14VectorMap
     return this->table_.linearEnd();
   }
 
+  reverse_iterator rbegin() {
+    return this->table_.values_;
+  }
+  const_reverse_iterator rbegin() const {
+    return crbegin();
+  }
+  const_reverse_iterator crbegin() const {
+    return this->table_.values_;
+  }
+
+  reverse_iterator rend() {
+    return this->table_.values_ + this->table_.size();
+  }
+  const_reverse_iterator rend() const {
+    return crend();
+  }
+  const_reverse_iterator crend() const {
+    return this->table_.values_ + this->table_.size();
+  }
+
+  // explicit conversions between iterator and reverse_iterator
+  iterator iter(reverse_iterator riter) {
+    return this->table_.iter(riter);
+  }
+  const_iterator iter(const_reverse_iterator riter) const {
+    return this->table_.iter(riter);
+  }
+
+  reverse_iterator riter(iterator it) {
+    return this->table_.riter(it);
+  }
+  const_reverse_iterator riter(const_iterator it) const {
+    return this->table_.riter(it);
+  }
+
  private:
   void eraseUnderlying(typename Policy::ItemIter underlying) {
     Alloc& a = this->table_.alloc();
     auto values = this->table_.values_;
 
-    // destroy the value and remove the ptr from the base table
+    // Remove the ptr from the base table and destroy the value.
     auto index = underlying.item();
-    std::allocator_traits<Alloc>::destroy(a, std::addressof(values[index]));
+    // The item still needs to be hashable during this call, so we must destroy
+    // the value _afterwards_.
     this->table_.erase(underlying);
+    std::allocator_traits<Alloc>::destroy(a, std::addressof(values[index]));
 
     // move the last element in values_ down and fix up the inbound index
     auto tailIndex = this->size();
@@ -939,7 +1018,8 @@ class F14VectorMap
     while (first != last) {
       first = erase(first);
     }
-    return first;
+    auto index = this->table_.iterToIndex(first);
+    return index == 0 ? end() : this->table_.indexToIter(index - 1);
   }
 
   std::size_t erase(key_type const& key) {
@@ -952,13 +1032,6 @@ class F14VectorMap
     }
   }
 };
-
-template <typename K, typename M, typename H, typename E, typename A>
-void swap(
-    F14VectorMap<K, M, H, E, A>& lhs,
-    F14VectorMap<K, M, H, E, A>& rhs) noexcept(noexcept(lhs.swap(rhs))) {
-  lhs.swap(rhs);
-}
 
 template <typename K, typename M, typename H, typename E, typename A>
 bool operator==(
@@ -974,17 +1047,58 @@ bool operator!=(
   return !(lhs == rhs);
 }
 
-template <
-    typename Key,
-    typename Mapped,
-    typename Hasher = f14::DefaultHasher<Key>,
-    typename KeyEqual = f14::DefaultKeyEqual<Key>,
-    typename Alloc = f14::DefaultAlloc<std::pair<Key const, Mapped>>>
-using F14FastMap = std::conditional_t<
-    sizeof(std::pair<Key const, Mapped>) < 24,
-    F14ValueMap<Key, Mapped, Hasher, KeyEqual, Alloc>,
-    F14VectorMap<Key, Mapped, Hasher, KeyEqual, Alloc>>;
-
 } // namespace folly
 
 #endif // FOLLY_F14_VECTOR_INTRINSICS_AVAILABLE
+
+namespace folly {
+
+template <
+    typename Key,
+    typename Mapped,
+    typename Hasher,
+    typename KeyEqual,
+    typename Alloc>
+class F14FastMap : public std::conditional_t<
+                       sizeof(std::pair<Key const, Mapped>) < 24,
+                       F14ValueMap<Key, Mapped, Hasher, KeyEqual, Alloc>,
+                       F14VectorMap<Key, Mapped, Hasher, KeyEqual, Alloc>> {
+  using Super = std::conditional_t<
+      sizeof(std::pair<Key const, Mapped>) < 24,
+      F14ValueMap<Key, Mapped, Hasher, KeyEqual, Alloc>,
+      F14VectorMap<Key, Mapped, Hasher, KeyEqual, Alloc>>;
+
+ public:
+  using Super::Super;
+  F14FastMap() : Super() {}
+};
+
+template <typename K, typename M, typename H, typename E, typename A>
+void swap(
+    F14ValueMap<K, M, H, E, A>& lhs,
+    F14ValueMap<K, M, H, E, A>& rhs) noexcept(noexcept(lhs.swap(rhs))) {
+  lhs.swap(rhs);
+}
+
+template <typename K, typename M, typename H, typename E, typename A>
+void swap(
+    F14NodeMap<K, M, H, E, A>& lhs,
+    F14NodeMap<K, M, H, E, A>& rhs) noexcept(noexcept(lhs.swap(rhs))) {
+  lhs.swap(rhs);
+}
+
+template <typename K, typename M, typename H, typename E, typename A>
+void swap(
+    F14VectorMap<K, M, H, E, A>& lhs,
+    F14VectorMap<K, M, H, E, A>& rhs) noexcept(noexcept(lhs.swap(rhs))) {
+  lhs.swap(rhs);
+}
+
+template <typename K, typename M, typename H, typename E, typename A>
+void swap(
+    F14FastMap<K, M, H, E, A>& lhs,
+    F14FastMap<K, M, H, E, A>& rhs) noexcept(noexcept(lhs.swap(rhs))) {
+  lhs.swap(rhs);
+}
+
+} // namespace folly

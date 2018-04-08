@@ -57,6 +57,9 @@ struct Big {
   friend bool operator!=(Big const& a, Big const& b) {
     return !(a == b);
   }
+  friend bool operator<(Big const& a, Big const& b) {
+    return a.value() < b.value();
+  }
   static std::ptrdiff_t s_count;
 };
 std::ptrdiff_t Big::s_count = 0;
@@ -90,6 +93,91 @@ TEST(Poly, SemiRegular) {
     EXPECT_THROW(poly_cast<short>(p2), BadPolyCast);
   }
   EXPECT_EQ(0, Big::s_count);
+}
+
+TEST(Poly, EqualityComparable) {
+  {
+    Poly<IEqualityComparable> p = 42;
+    Poly<IEqualityComparable> q = 42;
+    EXPECT_TRUE(p == q);
+    EXPECT_TRUE(q == p);
+    EXPECT_FALSE(p != q);
+    EXPECT_FALSE(q != p);
+    p = 43;
+    EXPECT_FALSE(p == q);
+    EXPECT_FALSE(q == p);
+    EXPECT_TRUE(p != q);
+    EXPECT_TRUE(q != p);
+  }
+  {
+    // empty not equal
+    Poly<IEqualityComparable> p;
+    Poly<IEqualityComparable> q = 42;
+    EXPECT_FALSE(p == q);
+    EXPECT_FALSE(q == p);
+  }
+  {
+    // empty equal
+    Poly<IEqualityComparable> p;
+    Poly<IEqualityComparable> q;
+    EXPECT_TRUE(p == q);
+    EXPECT_TRUE(q == p);
+  }
+  {
+    // mismatched types throws
+    Poly<IEqualityComparable> p = 4.2;
+    Poly<IEqualityComparable> q = 42;
+    EXPECT_THROW((void)(q == p), BadPolyCast);
+  }
+}
+
+TEST(Poly, StrictlyOrderable) {
+  {
+    // A small object, storable in-situ:
+    Poly<IStrictlyOrderable> p = 42;
+    Poly<IStrictlyOrderable> q = 43;
+    EXPECT_TRUE(p < q);
+    EXPECT_TRUE(p <= q);
+    EXPECT_FALSE(p > q);
+    EXPECT_FALSE(p >= q);
+    EXPECT_TRUE(q > p);
+    EXPECT_TRUE(q >= p);
+    EXPECT_FALSE(q < p);
+    EXPECT_FALSE(q <= p);
+  }
+  {
+    // A big object, stored on the heap:
+    Poly<IStrictlyOrderable> p = Big(42);
+    Poly<IStrictlyOrderable> q = Big(43);
+    EXPECT_TRUE(p < q);
+  }
+  {
+    // if equal, no one is bigger
+    Poly<IStrictlyOrderable> p = 42;
+    Poly<IStrictlyOrderable> q = 42;
+    EXPECT_FALSE(p < q);
+    EXPECT_TRUE(p <= q);
+    EXPECT_FALSE(p > q);
+    EXPECT_TRUE(p >= q);
+    EXPECT_FALSE(q < p);
+    EXPECT_TRUE(q <= p);
+    EXPECT_FALSE(q > p);
+    EXPECT_TRUE(q >= p);
+  }
+  {
+    // empty is always smaller
+    Poly<IStrictlyOrderable> p;
+    Poly<IStrictlyOrderable> q = 42;
+    EXPECT_TRUE(p < q);
+    EXPECT_FALSE(q < p);
+  }
+  {
+    // mismatched types throws
+    Poly<IStrictlyOrderable> p = 4.2;
+    Poly<IStrictlyOrderable> q = 42;
+    EXPECT_THROW((void)(p < q), BadPolyCast);
+    EXPECT_THROW((void)(q < p), BadPolyCast);
+  }
 }
 
 TEST(Poly, SemiRegularReference) {
@@ -299,9 +387,9 @@ struct Property {
       FOLLY_POLY_MEMBER(void(int), &T::prop));
 };
 
-struct property {
-  property() = default;
-  explicit property(int i) : j(i) {}
+struct has_property {
+  has_property() = default;
+  explicit has_property(int i) : j(i) {}
   int prop() const {
     return j;
   }
@@ -315,8 +403,8 @@ struct property {
 } // namespace
 
 TEST(Poly, OverloadedMembers) {
-  Poly<Property> p = property{42};
-  EXPECT_EQ(typeid(property), poly_type(p));
+  Poly<Property> p = has_property{42};
+  EXPECT_EQ(typeid(has_property), poly_type(p));
   EXPECT_EQ(42, p.prop());
   p.prop(68);
   EXPECT_EQ(68, p.prop());

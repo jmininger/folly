@@ -15,6 +15,34 @@
  */
 
 #include <folly/container/F14Map.h>
+#include <folly/container/test/F14TestUtil.h>
+#include <folly/portability/GTest.h>
+
+template <template <typename, typename, typename, typename, typename>
+          class TMap>
+void testCustomSwap() {
+  using std::swap;
+
+  TMap<
+      int,
+      int,
+      folly::f14::DefaultHasher<int>,
+      folly::f14::DefaultKeyEqual<int>,
+      folly::f14::SwapTrackingAlloc<std::pair<int const, int>>>
+      m0, m1;
+  folly::f14::resetTracking();
+  swap(m0, m1);
+
+  EXPECT_EQ(
+      0, folly::f14::Tracked<0>::counts.dist(folly::f14::Counts{0, 0, 0, 0}));
+}
+
+TEST(F14Map, customSwap) {
+  testCustomSwap<folly::F14ValueMap>();
+  testCustomSwap<folly::F14NodeMap>();
+  testCustomSwap<folly::F14VectorMap>();
+  testCustomSwap<folly::F14FastMap>();
+}
 
 ///////////////////////////////////
 #if FOLLY_F14_VECTOR_INTRINSICS_AVAILABLE
@@ -28,11 +56,9 @@
 
 #include <folly/Range.h>
 #include <folly/hash/Hash.h>
-#include <folly/portability/GTest.h>
-
-#include <folly/container/test/F14TestUtil.h>
 
 using namespace folly;
+using namespace folly::f14;
 using namespace folly::string_piece_literals;
 
 namespace {
@@ -140,8 +166,6 @@ void runSimple() {
   F14TableStats::compute(h7);
   F14TableStats::compute(h8);
   F14TableStats::compute(h9);
-
-  LOG(INFO) << "sizeof(" << typeid(T).name() << ") = " << sizeof(T);
 }
 
 template <typename T>
@@ -203,7 +227,7 @@ void runRandom() {
       auto t = t0.erase(k);
       auto r = r0.erase(k);
       EXPECT_EQ(t, r);
-    } else if (pct < 50) {
+    } else if (pct < 47) {
       // erase by iterator
       if (t0.size() > 0) {
         auto r = r0.find(k);
@@ -217,6 +241,28 @@ void runRandom() {
           EXPECT_NE(t->first, k);
         }
         r = r0.erase(r);
+        if (r != r0.end()) {
+          EXPECT_NE(r->first, k);
+        }
+      }
+    } else if (pct < 50) {
+      // bulk erase
+      if (t0.size() > 0) {
+        auto r = r0.find(k);
+        if (r == r0.end()) {
+          r = r0.begin();
+        }
+        k = r->first;
+        auto t = t0.find(k);
+        auto firstt = t;
+        auto lastt = ++t;
+        t = t0.erase(firstt, lastt);
+        if (t != t0.end()) {
+          EXPECT_NE(t->first, k);
+        }
+        auto firstr = r;
+        auto lastr = ++r;
+        r = r0.erase(firstr, lastr);
         if (r != r0.end()) {
           EXPECT_NE(r->first, k);
         }
@@ -341,7 +387,8 @@ void runPrehash() {
   EXPECT_FALSE(h.find(s("abc")) == h.end());
 
   auto t1 = h.prehash(s("def"));
-  auto t2 = h.prehash(s("abc"));
+  F14HashToken t2;
+  t2 = h.prehash(s("abc"));
   EXPECT_TRUE(h.find(t1, s("def")) == h.end());
   EXPECT_FALSE(h.find(t2, s("abc")) == h.end());
 }
@@ -359,9 +406,49 @@ TEST(F14VectorMap, simple) {
 }
 
 TEST(F14FastMap, simple) {
-  // F14FastMap is just a conditional typedef. Verify it compiles.
+  // F14FastMap inherits from a conditional typedef. Verify it compiles.
   runRandom<F14FastMap<uint64_t, uint64_t>>();
   runSimple<F14FastMap<std::string, std::string>>();
+}
+
+TEST(F14VectorMap, reverse_iterator) {
+  using TMap = F14VectorMap<uint64_t, uint64_t>;
+  auto populate = [](TMap& h, uint64_t lo, uint64_t hi) {
+    for (auto i = lo; i < hi; ++i) {
+      h.emplace(i, i);
+    }
+  };
+  auto verify = [](TMap const& h, uint64_t lo, uint64_t hi) {
+    auto loIt = h.find(lo);
+    EXPECT_NE(h.end(), loIt);
+    uint64_t val = lo;
+    for (auto rit = h.riter(loIt); rit != h.rend(); ++rit) {
+      EXPECT_EQ(val, rit->first);
+      EXPECT_EQ(val, rit->second);
+      TMap::const_iterator it = h.iter(rit);
+      EXPECT_EQ(val, it->first);
+      EXPECT_EQ(val, it->second);
+      val++;
+    }
+    EXPECT_EQ(hi, val);
+  };
+  TMap h;
+  size_t prevSize = 0;
+  size_t newSize = 1;
+  // verify iteration order across rehashes, copies, and moves
+  while (newSize < 10'000) {
+    populate(h, prevSize, newSize);
+    verify(h, 0, newSize);
+    verify(h, newSize / 2, newSize);
+
+    TMap h2{h};
+    verify(h2, 0, newSize);
+
+    h = std::move(h2);
+    verify(h, 0, newSize);
+    prevSize = newSize;
+    newSize *= 10;
+  }
 }
 
 TEST(F14ValueMap, rehash) {
@@ -401,10 +488,11 @@ TEST(F14ValueMap, grow_stats) {
   for (unsigned i = 1; i <= 3072; ++i) {
     h[i]++;
   }
-  LOG(INFO) << "F14ValueMap just before rehash -> "
-            << F14TableStats::compute(h);
+  // F14ValueMap just before rehash
+  F14TableStats::compute(h);
   h[0]++;
-  LOG(INFO) << "F14ValueMap just after rehash -> " << F14TableStats::compute(h);
+  // F14ValueMap just after rehash
+  F14TableStats::compute(h);
 }
 
 TEST(F14ValueMap, steady_state_stats) {
@@ -429,181 +517,35 @@ TEST(F14ValueMap, steady_state_stats) {
       EXPECT_LT(f14::expectedProbe(stats.missProbeLengthHisto), 10.0);
     }
   }
-  LOG(INFO) << "F14ValueMap at steady state -> " << F14TableStats::compute(h);
+  // F14ValueMap at steady state
+  F14TableStats::compute(h);
 }
 
-// Tracked is implicitly constructible across tags
-namespace {
-struct Counts {
-  uint64_t copyConstruct{0};
-  uint64_t moveConstruct{0};
-  uint64_t copyConvert{0};
-  uint64_t moveConvert{0};
-  uint64_t copyAssign{0};
-  uint64_t moveAssign{0};
-  uint64_t defaultConstruct{0};
-
-  explicit Counts(
-      uint64_t copConstr = 0,
-      uint64_t movConstr = 0,
-      uint64_t copConv = 0,
-      uint64_t movConv = 0,
-      uint64_t copAssign = 0,
-      uint64_t movAssign = 0,
-      uint64_t def = 0)
-      : copyConstruct{copConstr},
-        moveConstruct{movConstr},
-        copyConvert{copConv},
-        moveConvert{movConv},
-        copyAssign{copAssign},
-        moveAssign{movAssign},
-        defaultConstruct{def} {}
-
-  uint64_t dist(Counts const& rhs) const {
-    auto d = [](uint64_t x, uint64_t y) { return (x - y) * (x - y); };
-    return d(copyConstruct, rhs.copyConstruct) +
-        d(moveConstruct, rhs.moveConstruct) + d(copyConvert, rhs.copyConvert) +
-        d(moveConvert, rhs.moveConvert) + d(copyAssign, rhs.copyAssign) +
-        d(moveAssign, rhs.moveAssign) +
-        d(defaultConstruct, rhs.defaultConstruct);
+TEST(F14VectorMap, steady_state_stats) {
+  // 10k keys, 14% probability of insert, 90% chance of erase, so the
+  // table should converge to 1400 size without triggering the rehash
+  // that would occur at 1536.
+  F14VectorMap<std::string, uint64_t> h;
+  std::mt19937_64 gen(0);
+  std::uniform_int_distribution<> dist(0, 10000);
+  for (std::size_t i = 0; i < 100000; ++i) {
+    auto key = "0123456789ABCDEFGHIJKLMNOPQ" + std::to_string(dist(gen));
+    if (dist(gen) < 1400) {
+      h.insert_or_assign(key, i);
+    } else {
+      h.erase(key);
+    }
+    if (((i + 1) % 10000) == 0) {
+      auto stats = F14TableStats::compute(h);
+      // Verify that average miss probe length is bounded despite continued
+      // erase + reuse.  p99 of the average across 10M random steps is 4.69,
+      // average is 2.96.
+      EXPECT_LT(f14::expectedProbe(stats.missProbeLengthHisto), 10.0);
+    }
   }
-
-  bool operator==(Counts const& rhs) const {
-    return copyConstruct == rhs.copyConstruct &&
-        moveConstruct == rhs.moveConstruct && copyConvert == rhs.copyConvert &&
-        moveConvert == rhs.moveConvert && copyAssign == rhs.copyAssign &&
-        moveAssign == rhs.moveAssign &&
-        defaultConstruct == rhs.defaultConstruct;
-  }
-  bool operator!=(Counts const& rhs) const {
-    return !(*this == rhs);
-  }
-};
-
-thread_local Counts sumCounts{};
-
-template <int Tag>
-struct Tracked {
-  static thread_local Counts counts;
-
-  uint64_t val_;
-
-  Tracked() : val_{0} {
-    sumCounts.defaultConstruct++;
-    counts.defaultConstruct++;
-  }
-  /* implicit */ Tracked(uint64_t val) : val_{val} {
-    sumCounts.copyConvert++;
-    counts.copyConvert++;
-  }
-  Tracked(Tracked const& rhs) : val_{rhs.val_} {
-    sumCounts.copyConstruct++;
-    counts.copyConstruct++;
-  }
-  Tracked(Tracked&& rhs) noexcept : val_{rhs.val_} {
-    sumCounts.moveConstruct++;
-    counts.moveConstruct++;
-  }
-  Tracked& operator=(Tracked const& rhs) {
-    val_ = rhs.val_;
-    sumCounts.copyAssign++;
-    counts.copyAssign++;
-    return *this;
-  }
-  Tracked& operator=(Tracked&& rhs) noexcept {
-    val_ = rhs.val_;
-    sumCounts.moveAssign++;
-    counts.moveAssign++;
-    return *this;
-  }
-
-  template <int T>
-  /* implicit */ Tracked(Tracked<T> const& rhs) : val_{rhs.val_} {
-    sumCounts.copyConvert++;
-    counts.copyConvert++;
-  }
-
-  template <int T>
-  /* implicit */ Tracked(Tracked<T>&& rhs) : val_{rhs.val_} {
-    sumCounts.moveConvert++;
-    counts.moveConvert++;
-  }
-
-  bool operator==(Tracked const& rhs) const {
-    return val_ == rhs.val_;
-  }
-  bool operator!=(Tracked const& rhs) const {
-    return !(*this == rhs);
-  }
-};
-
-template <>
-thread_local Counts Tracked<0>::counts{};
-template <>
-thread_local Counts Tracked<1>::counts{};
-template <>
-thread_local Counts Tracked<2>::counts{};
-template <>
-thread_local Counts Tracked<3>::counts{};
-template <>
-thread_local Counts Tracked<4>::counts{};
-template <>
-thread_local Counts Tracked<5>::counts{};
-
-void resetTracking() {
-  sumCounts = Counts{};
-  Tracked<0>::counts = Counts{};
-  Tracked<1>::counts = Counts{};
-  Tracked<2>::counts = Counts{};
-  Tracked<3>::counts = Counts{};
-  Tracked<4>::counts = Counts{};
-  Tracked<5>::counts = Counts{};
+  // F14ValueMap at steady state
+  F14TableStats::compute(h);
 }
-} // namespace
-
-std::ostream& operator<<(std::ostream& xo, Counts const& counts) {
-  xo << "[";
-  std::string glue = "";
-  if (counts.copyConstruct > 0) {
-    xo << glue << counts.copyConstruct << " copy";
-    glue = ", ";
-  }
-  if (counts.moveConstruct > 0) {
-    xo << glue << counts.moveConstruct << " move";
-    glue = ", ";
-  }
-  if (counts.copyConvert > 0) {
-    xo << glue << counts.copyConvert << " copy convert";
-    glue = ", ";
-  }
-  if (counts.moveConvert > 0) {
-    xo << glue << counts.moveConvert << " move convert";
-    glue = ", ";
-  }
-  if (counts.copyAssign > 0) {
-    xo << glue << counts.copyAssign << " copy assign";
-    glue = ", ";
-  }
-  if (counts.moveAssign > 0) {
-    xo << glue << counts.moveAssign << " move assign";
-    glue = ", ";
-  }
-  if (counts.defaultConstruct > 0) {
-    xo << glue << counts.defaultConstruct << " default construct";
-    glue = ", ";
-  }
-  xo << "]";
-  return xo;
-}
-
-namespace std {
-template <int Tag>
-struct hash<Tracked<Tag>> {
-  size_t operator()(Tracked<Tag> const& tracked) const {
-    return tracked.val_ ^ Tag;
-  }
-};
-} // namespace std
 
 TEST(Tracked, baseline) {
   Tracked<0> a0;
@@ -674,7 +616,7 @@ TEST(Tracked, baseline) {
 // and a pair const& or pair&& and cause it to be inserted
 template <typename M, typename F>
 void runInsertCases(
-    std::string const& name,
+    std::string const& /* name */,
     F const& insertFunc,
     uint64_t expectedDist = 0) {
   static_assert(std::is_same<typename M::key_type, Tracked<0>>::value, "");
@@ -684,9 +626,7 @@ void runInsertCases(
     M m;
     resetTracking();
     insertFunc(m, p);
-    LOG(INFO) << name << ", fresh key, value_type const& -> "
-              << "key_type ops " << Tracked<0>::counts << ", mapped_type ops "
-              << Tracked<1>::counts;
+    // fresh key, value_type const& ->
     // copy is expected
     EXPECT_EQ(
         Tracked<0>::counts.dist(Counts{1, 0, 0, 0}) +
@@ -698,9 +638,7 @@ void runInsertCases(
     M m;
     resetTracking();
     insertFunc(m, std::move(p));
-    LOG(INFO) << name << ", fresh key, value_type&& -> "
-              << "key_type ops " << Tracked<0>::counts << ", mapped_type ops "
-              << Tracked<1>::counts;
+    // fresh key, value_type&& ->
     // key copy is unfortunate but required
     EXPECT_EQ(
         Tracked<0>::counts.dist(Counts{1, 0, 0, 0}) +
@@ -712,9 +650,7 @@ void runInsertCases(
     M m;
     resetTracking();
     insertFunc(m, p);
-    LOG(INFO) << name << ", fresh key, pair<key_type,mapped_type> const& -> "
-              << "key_type ops " << Tracked<0>::counts << ", mapped_type ops "
-              << Tracked<1>::counts;
+    // fresh key, pair<key_type,mapped_type> const& ->
     // 1 copy is required
     EXPECT_EQ(
         Tracked<0>::counts.dist(Counts{1, 0, 0, 0}) +
@@ -726,9 +662,7 @@ void runInsertCases(
     M m;
     resetTracking();
     insertFunc(m, std::move(p));
-    LOG(INFO) << name << ", fresh key, pair<key_type,mapped_type>&& -> "
-              << "key_type ops " << Tracked<0>::counts << ", mapped_type ops "
-              << Tracked<1>::counts;
+    // fresh key, pair<key_type,mapped_type>&& ->
     // this is the happy path for insert(make_pair(.., ..))
     EXPECT_EQ(
         Tracked<0>::counts.dist(Counts{0, 1, 0, 0}) +
@@ -740,11 +674,11 @@ void runInsertCases(
     M m;
     resetTracking();
     insertFunc(m, p);
-    LOG(INFO) << name << ", fresh key, convertible const& -> "
-              << "key_type ops " << Tracked<0>::counts << ", key_src ops "
-              << Tracked<2>::counts << ", mapped_type ops "
-              << Tracked<1>::counts << ", mapped_src ops "
-              << Tracked<3>::counts;
+    // fresh key, convertible const& ->
+    //   key_type ops: Tracked<0>::counts
+    //   mapped_type ops: Tracked<1>::counts
+    //   key_src ops: Tracked<2>::counts
+    //   mapped_src ops: Tracked<3>::counts;
 
     // There are three strategies that could be optimal for particular
     // ratios of cost:
@@ -775,12 +709,11 @@ void runInsertCases(
     M m;
     resetTracking();
     insertFunc(m, std::move(p));
-    LOG(INFO) << name << ", fresh key, convertible&& -> "
-              << "key_type ops " << Tracked<0>::counts << ", key_src ops "
-              << Tracked<2>::counts << ", mapped_type ops "
-              << Tracked<1>::counts << ", mapped_src ops "
-              << Tracked<3>::counts;
-
+    // fresh key, convertible&& ->
+    //   key_type ops: Tracked<0>::counts
+    //   mapped_type ops: Tracked<1>::counts
+    //   key_src ops: Tracked<2>::counts
+    //   mapped_src ops: Tracked<3>::counts;
     EXPECT_EQ(
         Tracked<0>::counts.dist(Counts{0, 1, 0, 1}) +
             Tracked<1>::counts.dist(Counts{0, 0, 0, 1}) +
@@ -794,10 +727,7 @@ void runInsertCases(
     m[0] = 0;
     resetTracking();
     insertFunc(m, p);
-    LOG(INFO) << name << ", duplicate key, value_type const& -> "
-              << "key_type ops " << Tracked<0>::counts << ", mapped_type ops "
-              << Tracked<1>::counts;
-
+    // duplicate key, value_type const&
     EXPECT_EQ(
         Tracked<0>::counts.dist(Counts{0, 0, 0, 0}) +
             Tracked<1>::counts.dist(Counts{0, 0, 0, 0}),
@@ -809,10 +739,7 @@ void runInsertCases(
     m[0] = 0;
     resetTracking();
     insertFunc(m, std::move(p));
-    LOG(INFO) << name << ", duplicate key, value_type&& -> "
-              << "key_type ops " << Tracked<0>::counts << ", mapped_type ops "
-              << Tracked<1>::counts;
-
+    // duplicate key, value_type&&
     EXPECT_EQ(
         Tracked<0>::counts.dist(Counts{0, 0, 0, 0}) +
             Tracked<1>::counts.dist(Counts{0, 0, 0, 0}),
@@ -824,11 +751,7 @@ void runInsertCases(
     m[0] = 0;
     resetTracking();
     insertFunc(m, p);
-    LOG(INFO) << name
-              << ", duplicate key, pair<key_type,mapped_type> const& -> "
-              << "key_type ops " << Tracked<0>::counts << ", mapped_type ops "
-              << Tracked<1>::counts;
-
+    // duplicate key, pair<key_type,mapped_type> const&
     EXPECT_EQ(
         Tracked<0>::counts.dist(Counts{0, 0, 0, 0}) +
             Tracked<1>::counts.dist(Counts{0, 0, 0, 0}),
@@ -840,10 +763,7 @@ void runInsertCases(
     m[0] = 0;
     resetTracking();
     insertFunc(m, std::move(p));
-    LOG(INFO) << name << ", duplicate key, pair<key_type,mapped_type>&& -> "
-              << "key_type ops " << Tracked<0>::counts << ", mapped_type ops "
-              << Tracked<1>::counts;
-
+    // duplicate key, pair<key_type,mapped_type>&&
     EXPECT_EQ(
         Tracked<0>::counts.dist(Counts{0, 0, 0, 0}) +
             Tracked<1>::counts.dist(Counts{0, 0, 0, 0}),
@@ -855,12 +775,11 @@ void runInsertCases(
     m[0] = 0;
     resetTracking();
     insertFunc(m, p);
-    LOG(INFO) << name << ", duplicate key, convertible const& -> "
-              << "key_type ops " << Tracked<0>::counts << ", key_src ops "
-              << Tracked<2>::counts << ", mapped_type ops "
-              << Tracked<1>::counts << ", mapped_src ops "
-              << Tracked<3>::counts;
-
+    // duplicate key, convertible const& ->
+    //   key_type ops: Tracked<0>::counts
+    //   mapped_type ops: Tracked<1>::counts
+    //   key_src ops: Tracked<2>::counts
+    //   mapped_src ops: Tracked<3>::counts;
     EXPECT_EQ(
         Tracked<0>::counts.dist(Counts{0, 0, 1, 0}) +
             Tracked<1>::counts.dist(Counts{0, 0, 0, 0}) +
@@ -874,12 +793,11 @@ void runInsertCases(
     m[0] = 0;
     resetTracking();
     insertFunc(m, std::move(p));
-    LOG(INFO) << name << ", duplicate key, convertible&& -> "
-              << "key_type ops " << Tracked<0>::counts << ", key_src ops "
-              << Tracked<2>::counts << ", mapped_type ops "
-              << Tracked<1>::counts << ", mapped_src ops "
-              << Tracked<3>::counts;
-
+    // duplicate key, convertible&& ->
+    //   key_type ops: Tracked<0>::counts
+    //   mapped_type ops: Tracked<1>::counts
+    //   key_src ops: Tracked<2>::counts
+    //   mapped_src ops: Tracked<3>::counts;
     EXPECT_EQ(
         Tracked<0>::counts.dist(Counts{0, 0, 0, 1}) +
             Tracked<1>::counts.dist(Counts{0, 0, 0, 0}) +
